@@ -1,0 +1,20 @@
+name = "livetrackiq"
+main = "api/index.js"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "./dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "livetrackiq-prod"
+database_id = "da674f0b-cb9f-4eb1-9b9d-fe9320810163"
+
+[vars]
+GOOGLE_CLIENT_ID = "492871350280-518mvjks3derdnbd71p9uhbd8vhh5918.apps.googleusercontent.com"
+GOOGLE_REDIRECT_URI = "https://livetrackiq.com/api/auth/callback"
+APP_URL = "https://livetrackiq.com"
+
+# Secrets (set via `wrangler secret put`):
+# GOOGLE_CLIENT_SECRET
+# SESSION_SECRET
