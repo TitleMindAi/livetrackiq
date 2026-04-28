@@ -7,16 +7,37 @@ export const dashboardRoutes = new Hono();
  * Returns aggregated stats for the current user (or team if leader/admin)
  * Query: ?view=today|week|month&userId=1
  */
+// Hank Sprint 3: trackable scoreboard support
+const TRACKABLES = [
+  'auto_quote', 'fire_quote', 'life_presentation', 'disability_presentation',
+  'submitted_app', 'google_review_completed', 'google_review_ask', 'referral_hh_quoted',
+];
+
 dashboardRoutes.get('/', async (c) => {
   const user = c.get('user');
   const view = c.req.query('view') || 'today';
   const userIds = c.req.query('userIds');
+  const qFrom = c.req.query('from');
+  const qTo = c.req.query('to');
+  const trackable = c.req.query('trackable'); // Sprint 3: scoreboard metric
+  // Hank 2026-04-28: comma-separated list for multi-select. `trackable` (single)
+  // is still supported for backwards-compat. Multi takes precedence when present.
+  const trackablesRaw = c.req.query('trackables');
+  const trackables = trackablesRaw ? trackablesRaw.split(',').map(s => s.trim()).filter(Boolean) : null;
 
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   let from, to;
 
-  switch (view) {
+  // Hank v2: custom range honored when view=custom and valid ISO dates provided
+  const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+  const useCustom = view === 'custom' && isoDate.test(qFrom || '') && isoDate.test(qTo || '');
+  if (useCustom) {
+    from = qFrom;
+    to = qTo;
+  }
+
+  if (!useCustom) switch (view) {
     case 'today':
       from = today;
       to = today;
@@ -102,6 +123,84 @@ dashboardRoutes.get('/', async (c) => {
     const summParams = [user.officeId, from, to, ...userFilterParams];
 
     const summary = await c.env.DB.prepare(summSql).bind(...summParams).all();
+
+    // ===== Sprint 3: Trackable-aware leaderboard + recent activity =====
+    // When `trackable` is one of the 8 ACTIVITY_TYPES, the leaderboard / recent
+    // activity panels reflect activity_events instead of applications.
+    // This lets Hank see leaders by "Auto Quote", "Google Review Ask", etc.
+    // Hank 2026-04-28: resolve to active trackable list (multi takes precedence)
+    const activeTrackables = (trackables && trackables.length > 0)
+      ? trackables.filter(t => TRACKABLES.includes(t))
+      : (trackable && TRACKABLES.includes(trackable) ? [trackable] : []);
+
+    if (activeTrackables.length > 0) {
+      try {
+        const inList = activeTrackables.map(() => '?').join(',');
+        // Trackable-scoped leaderboard (sums across all selected trackables)
+        let lbT = `
+          SELECT u.id, u.name, u.initials, u.role,
+                 COALESCE(SUM(e.count), 0) as total_count
+          FROM users u
+          LEFT JOIN activity_events e
+            ON e.user_id = u.id
+            AND e.activity_type IN (${inList})
+            AND e.activity_date >= ? AND e.activity_date <= ?
+          WHERE u.office_id = ? AND u.is_active = 1 AND u.role IN ('agent', 'sales_specialist')
+        `;
+        const lbTParams = [...activeTrackables, from, to, user.officeId];
+        if (targetUserId) { lbT += ' AND u.id = ?'; lbTParams.push(targetUserId); }
+        else if (targetUserIds?.length) {
+          lbT += ` AND u.id IN (${targetUserIds.map(() => '?').join(',')})`;
+          lbTParams.push(...targetUserIds);
+        }
+        lbT += ' GROUP BY u.id ORDER BY total_count DESC';
+        const lbTRes = await c.env.DB.prepare(lbT).bind(...lbTParams).all();
+
+        // Trackable-scoped recent activity (last 12 events)
+        let recT = `
+          SELECT e.id, e.activity_type, e.activity_date, e.created_at,
+                 e.customer_name, e.lead_source, e.lead_temperature, e.count,
+                 u.name as agent_name, u.initials
+          FROM activity_events e
+          JOIN users u ON e.user_id = u.id
+          WHERE e.office_id = ? AND e.activity_type IN (${inList})
+            AND e.activity_date >= ? AND e.activity_date <= ?
+        `;
+        const recTParams = [user.officeId, ...activeTrackables, from, to];
+        if (targetUserId) { recT += ' AND e.user_id = ?'; recTParams.push(targetUserId); }
+        else if (targetUserIds?.length) {
+          recT += ` AND e.user_id IN (${targetUserIds.map(() => '?').join(',')})`;
+          recTParams.push(...targetUserIds);
+        }
+        recT += ' ORDER BY e.created_at DESC LIMIT 24';
+        const recTRes = await c.env.DB.prepare(recT).bind(...recTParams).all();
+
+        return c.json({
+          view, from, to,
+          trackable: activeTrackables.length === 1 ? activeTrackables[0] : null,
+          trackables: activeTrackables,
+          summary: summary.results,
+          leaderboard: lbTRes.results.map(r => ({ ...r, total_apps: r.total_count })),
+          recentActivity: recTRes.results.map(r => ({
+            id: `e_${r.id}`,
+            activity_type: r.activity_type,
+            customer_name: r.customer_name || '—',
+            agent_name: r.agent_name,
+            initials: r.initials,
+            submitted_at: r.created_at,
+            count: r.count,
+            lead_source: r.lead_source,
+            lead_temperature: r.lead_temperature,
+          })),
+        });
+      } catch (errT) {
+        const m = String(errT?.message || errT);
+        if (/no such table|no such column/i.test(m)) {
+          // Fallback: trackable view degrades silently to legacy app-based view
+          console.warn('Trackable leaderboard fallback (migration pending):', m);
+        } else throw errT;
+      }
+    }
 
     // Leaderboard (top performers for the period)
     let lbSql = `

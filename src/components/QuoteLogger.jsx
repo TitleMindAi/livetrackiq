@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { APP_TYPES, LINES } from '../lib/constants';
+import { APP_TYPES, LINES, FEATURE_FLAGS } from '../lib/constants';
 
 /**
  * QuoteLogger — Quick-entry quote logging card
@@ -88,7 +88,7 @@ export default function QuoteLogger() {
           color: 'var(--text-faint)', fontSize: 11, fontWeight: 700,
           letterSpacing: '.1em', marginBottom: 12, textTransform: 'uppercase',
         }}>
-          Log Quotes
+          {FEATURE_FLAGS.ff_log_activities ? 'Log Activities' : 'Log Quotes'}
         </div>
 
         {/* Grid: 4 columns for 4 lines */}

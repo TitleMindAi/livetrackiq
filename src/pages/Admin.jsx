@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../lib/AuthContext';
 import { api } from '../lib/api';
+import { FEATURE_FLAGS } from '../lib/constants';
 
 /**
  * Admin Panel — Mobile-first layout (Hank checks on phone)
@@ -14,6 +15,8 @@ export default function Admin() {
   const [showAdd, setShowAdd] = useState(false);
   const [newUser, setNewUser] = useState({ email: '', name: '', role: 'agent' });
   const [toast, setToast] = useState(null);
+  // Sprint 4: filter active vs inactive
+  const [showInactive, setShowInactive] = useState(false);
 
   // Holidays
   const [holidays, setHolidays] = useState([]);
@@ -64,9 +67,14 @@ export default function Admin() {
     }
   };
 
+  // Sprint 4 fix: backend validator expects 0 or 1 (not bool).
+  // Old code sent !u.is_active (boolean) → 400 "is_active must be 0 or 1".
   const toggleActive = async (u) => {
     try {
-      await api.updateUser(u.id, { is_active: !u.is_active });
+      const next = u.is_active ? 0 : 1;
+      await api.updateUser(u.id, { is_active: next });
+      setToast({ type: 'success', message: next ? `${u.name} activated` : `${u.name} deactivated` });
+      setTimeout(() => setToast(null), 2500);
       loadUsers();
     } catch (err) {
       setToast({ type: 'error', message: err.message });
@@ -134,19 +142,33 @@ export default function Admin() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: 'var(--text)' }}>Team Management</h1>
           <p style={{ color: 'var(--text-faint)', fontSize: 13, margin: 0 }}>
-            Add team members by their Google email
+            Add team members by their work email (Google or @statefarm.com)
           </p>
         </div>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          style={{
-            background: 'linear-gradient(135deg, var(--accent), var(--accent-secondary))',
-            color: 'var(--accent-text)', border: 'none', padding: '10px 18px',
-            borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer',
-          }}
-        >
-          + Add
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Sprint 4: inactive toggle */}
+          <button
+            onClick={() => setShowInactive(s => !s)}
+            style={{
+              background: showInactive ? 'var(--accent-bg)' : 'var(--bg-card)',
+              border: `1px solid ${showInactive ? 'var(--accent-border)' : 'var(--border-input)'}`,
+              color: showInactive ? 'var(--accent)' : 'var(--text-muted)',
+              padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            {showInactive ? 'Showing all' : 'Show inactive'}
+          </button>
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            style={{
+              background: 'linear-gradient(135deg, var(--accent), var(--accent-secondary))',
+              color: 'var(--accent-text)', border: 'none', padding: '10px 18px',
+              borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            + Add
+          </button>
+        </div>
       </div>
 
       {/* Add User Form */}
@@ -163,7 +185,7 @@ export default function Admin() {
               style={inputStyle}
             />
             <input
-              placeholder="Google Email"
+              placeholder="Email (e.g. agent@statefarm.com)"
               value={newUser.email}
               onChange={e => setNewUser(p => ({ ...p, email: e.target.value }))}
               style={inputStyle}
@@ -202,7 +224,7 @@ export default function Admin() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-faint)' }}>Loading...</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {users.map(u => (
+          {users.filter(u => showInactive ? true : u.is_active).map(u => (
             <div key={u.id} style={{
               ...cardStyle,
               opacity: u.is_active ? 1 : 0.5,

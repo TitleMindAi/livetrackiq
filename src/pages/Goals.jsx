@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../lib/AuthContext';
 import { api } from '../lib/api';
-import { APP_TYPES, LINES, DEFAULT_RATIOS } from '../lib/constants';
+import { APP_TYPES, LINES, DEFAULT_RATIOS, ACTIVITY_TYPES, FEATURE_FLAGS } from '../lib/constants';
 
 /**
  * Goals Page — Set goals + view real-time calculator
@@ -28,6 +28,14 @@ export default function Goals() {
   // Editable goal inputs
   const [goalInputs, setGoalInputs] = useState({});
   const [ratioInputs, setRatioInputs] = useState({});
+
+  // Sprint 5: custom + trackable goals
+  const [customGoals, setCustomGoals] = useState([]);
+  const [customMigrationPending, setCustomMigrationPending] = useState(false);
+  const [showAddGoal, setShowAddGoal] = useState(false);
+  const [newGoal, setNewGoal] = useState({
+    trackerKey: 'referral_hh_quoted', label: '', countGoal: 0, premiumGoal: 0, closingRatio: 0,
+  });
 
   useEffect(() => {
     if (isLeader) {
@@ -63,6 +71,59 @@ export default function Goals() {
   }, [period, selectedUserId]);
 
   useEffect(() => { loadCalc(); }, [loadCalc]);
+
+  // Sprint 5: load custom goals when period/user changes
+  const loadCustomGoals = useCallback(async () => {
+    if (!FEATURE_FLAGS.ff_goals_expand) return;
+    try {
+      const params = { period };
+      if (selectedUserId) params.userId = selectedUserId;
+      const data = await api.getCustomGoals(params);
+      setCustomGoals(data.goals || []);
+      setCustomMigrationPending(!!data.migrationPending);
+    } catch (err) {
+      console.error('Custom goals load error:', err);
+    }
+  }, [period, selectedUserId]);
+
+  useEffect(() => { loadCustomGoals(); }, [loadCustomGoals]);
+
+  const addCustomGoal = async () => {
+    if (!newGoal.trackerKey || !newGoal.label) {
+      setToast({ type: 'error', message: 'Tracker + label required' });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    try {
+      await api.createCustomGoal({
+        userId: selectedUserId || undefined,
+        period,
+        trackerKey: newGoal.trackerKey,
+        label: newGoal.label,
+        countGoal: parseInt(newGoal.countGoal) || 0,
+        premiumGoal: parseFloat(newGoal.premiumGoal) || 0,
+        closingRatio: (parseFloat(newGoal.closingRatio) || 0) / 100,
+      });
+      setToast({ type: 'success', message: 'Goal added' });
+      setTimeout(() => setToast(null), 2500);
+      setShowAddGoal(false);
+      setNewGoal({ trackerKey: 'referral_hh_quoted', label: '', countGoal: 0, premiumGoal: 0, closingRatio: 0 });
+      loadCustomGoals();
+    } catch (err) {
+      setToast({ type: 'error', message: err.message });
+      setTimeout(() => setToast(null), 4000);
+    }
+  };
+
+  const removeCustomGoal = async (id) => {
+    try {
+      await api.deleteCustomGoal(id);
+      loadCustomGoals();
+    } catch (err) {
+      setToast({ type: 'error', message: err.message });
+      setTimeout(() => setToast(null), 4000);
+    }
+  };
 
   const saveGoals = async () => {
     setSaving(true);
@@ -217,6 +278,106 @@ export default function Goals() {
             >
               {saving ? 'Saving...' : 'Save Goals & Ratios'}
             </button>
+
+            {/* Sprint 5: Custom / Trackable Goals */}
+            {FEATURE_FLAGS.ff_goals_expand && (
+              <div style={{ ...cardStyle, marginTop: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Custom & Trackable Goals</span>
+                  <button
+                    onClick={() => setShowAddGoal(s => !s)}
+                    style={{
+                      background: 'var(--accent-bg)', color: 'var(--accent)',
+                      border: '1px solid var(--accent-border)', padding: '6px 12px', borderRadius: 8,
+                      fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    {showAddGoal ? 'Cancel' : '+ Add Goal'}
+                  </button>
+                </div>
+                {customMigrationPending && (
+                  <div style={{ fontSize: 11, color: 'var(--error)', marginBottom: 8 }}>
+                    Migration 004 not yet applied — custom goals disabled.
+                  </div>
+                )}
+                {showAddGoal && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                    <select
+                      value={newGoal.trackerKey}
+                      onChange={e => {
+                        const k = e.target.value;
+                        const def = ACTIVITY_TYPES.find(t => t.key === k);
+                        setNewGoal(g => ({ ...g, trackerKey: k, label: g.label || def?.label || '' }));
+                      }}
+                      style={inputStyle}
+                    >
+                      {ACTIVITY_TYPES.map(t => <option key={t.key} value={t.key}>{t.label} (tracked)</option>)}
+                      <option value="custom">— Custom (free-form) —</option>
+                    </select>
+                    {newGoal.trackerKey === 'custom' && (
+                      <input
+                        placeholder="Tracker slug (e.g. investment_statements)"
+                        value={newGoal.customSlug || ''}
+                        onChange={e => setNewGoal(g => ({ ...g, customSlug: e.target.value, trackerKey: e.target.value || 'custom' }))}
+                        style={inputStyle}
+                      />
+                    )}
+                    <input
+                      placeholder="Display label (e.g. Investment Statements)"
+                      value={newGoal.label}
+                      onChange={e => setNewGoal(g => ({ ...g, label: e.target.value }))}
+                      style={inputStyle}
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                      <input type="number" placeholder="# Goal" value={newGoal.countGoal}
+                        onChange={e => setNewGoal(g => ({ ...g, countGoal: e.target.value }))} style={inputStyle} />
+                      <input type="number" placeholder="Premium" value={newGoal.premiumGoal}
+                        onChange={e => setNewGoal(g => ({ ...g, premiumGoal: e.target.value }))} style={inputStyle} />
+                      <input type="number" placeholder="Close %" value={newGoal.closingRatio}
+                        onChange={e => setNewGoal(g => ({ ...g, closingRatio: e.target.value }))} style={inputStyle} />
+                    </div>
+                    <button
+                      onClick={addCustomGoal}
+                      style={{
+                        background: 'var(--success)', color: '#fff', border: 'none',
+                        padding: '8px', borderRadius: 8, fontWeight: 600, cursor: 'pointer', fontSize: 12,
+                      }}
+                    >
+                      Save Goal
+                    </button>
+                  </div>
+                )}
+                {customGoals.length === 0 && !showAddGoal && !customMigrationPending && (
+                  <div style={{ fontSize: 12, color: 'var(--text-disabled)', padding: '8px 0' }}>
+                    No custom goals yet. Use <strong>+ Add Goal</strong> to track Referrals, Reviews, or anything else.
+                  </div>
+                )}
+                {customGoals.map(g => (
+                  <div key={g.id} style={{
+                    display: 'grid', gridTemplateColumns: '1fr auto auto auto',
+                    gap: 8, alignItems: 'center', padding: '6px 0',
+                    borderTop: '1px solid var(--border-separator)',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{g.label}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>{g.trackerKey}</div>
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{g.actual}/{g.countGoal}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                      {g.closingRatio ? `${(g.closingRatio*100).toFixed(0)}%` : ''}
+                    </span>
+                    <button
+                      onClick={() => removeCustomGoal(g.id)}
+                      style={{
+                        background: 'var(--error-bg)', border: 'none', color: 'var(--error-light)',
+                        width: 22, height: 22, borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                      }}
+                      title="Remove"
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* RIGHT: Live Calculator Results */}

@@ -117,14 +117,25 @@ authRoutes.get('/me', async (c) => {
   const sessionId = getCookie(c, 'ltiq_session');
   if (!sessionId) return c.json({ user: null });
 
+  // Sprint 4: include is_owner via COALESCE so pre-migration deployments still work
   const result = await c.env.DB.prepare(`
     SELECT u.id, u.email, u.name, u.initials, u.role, u.office_id, u.avatar_url,
+           COALESCE(u.is_owner, 0) as is_owner,
            o.name as office_name
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     JOIN offices o ON u.office_id = o.id
     WHERE s.id = ? AND u.is_active = 1 AND s.expires_at > datetime('now')
-  `).bind(sessionId).first();
+  `).bind(sessionId).first().catch(async (err) => {
+    // Fallback if migration 003 not applied yet
+    return c.env.DB.prepare(`
+      SELECT u.id, u.email, u.name, u.initials, u.role, u.office_id, u.avatar_url,
+             0 as is_owner, o.name as office_name
+      FROM sessions s JOIN users u ON s.user_id = u.id
+      JOIN offices o ON u.office_id = o.id
+      WHERE s.id = ? AND u.is_active = 1 AND s.expires_at > datetime('now')
+    `).bind(sessionId).first();
+  });
 
   if (!result) return c.json({ user: null });
 
@@ -138,6 +149,7 @@ authRoutes.get('/me', async (c) => {
       officeId: result.office_id,
       officeName: result.office_name,
       avatarUrl: result.avatar_url,
+      isOwner: !!result.is_owner,
     },
   });
 });

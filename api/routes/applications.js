@@ -17,26 +17,57 @@ appRoutes.post('/', async (c) => {
     return c.json({ error: 'Validation failed', details: result.errors }, 400);
   }
 
-  const { customerName, phone, email, notes, lines, leadTemperature } = result.data;
+  const { customerName, phone, email, notes, lines, leadTemperature, leadSource } = result.data;
 
   try {
-    // Create customer record
-    const custResult = await c.env.DB.prepare(
-      'INSERT INTO customers (name, phone, email, notes, office_id, created_by) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
-    ).bind(customerName, phone || null, email || null, notes || null, user.officeId, user.id).first();
+    // Create customer record (P0: persist lead_source — graceful fallback if migration 005 not run)
+    let customerId;
+    try {
+      const custResult = await c.env.DB.prepare(
+        'INSERT INTO customers (name, phone, email, notes, lead_source, office_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+      ).bind(customerName, phone || null, email || null, notes || null, leadSource || null, user.officeId, user.id).first();
+      customerId = custResult.id;
+    } catch (e) {
+      if (/no such column/i.test(String(e?.message || e))) {
+        const custResult = await c.env.DB.prepare(
+          'INSERT INTO customers (name, phone, email, notes, office_id, created_by) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
+        ).bind(customerName, phone || null, email || null, notes || null, user.officeId, user.id).first();
+        customerId = custResult.id;
+      } else throw e;
+    }
 
-    const customerId = custResult.id;
+    // Insert each application line (P0: persist lead_source per row, with fallback)
+    let insertStmt;
+    try {
+      insertStmt = c.env.DB.prepare(
+        'INSERT INTO applications (customer_id, line, product_type, premium, submitted_by, office_id, lead_source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      );
+      const batch = lines.map(l =>
+        insertStmt.bind(customerId, l.line, l.productType, l.premium || 0, user.id, user.officeId, leadSource || null)
+      );
+      await c.env.DB.batch(batch);
+    } catch (e) {
+      if (/no such column/i.test(String(e?.message || e))) {
+        const legacyStmt = c.env.DB.prepare(
+          'INSERT INTO applications (customer_id, line, product_type, premium, submitted_by, office_id) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        const batch = lines.map(l =>
+          legacyStmt.bind(customerId, l.line, l.productType, l.premium || 0, user.id, user.officeId)
+        );
+        await c.env.DB.batch(batch);
+      } else throw e;
+    }
 
-    // Insert each application line
-    const insertStmt = c.env.DB.prepare(
-      'INSERT INTO applications (customer_id, line, product_type, premium, submitted_by, office_id) VALUES (?, ?, ?, ?, ?, ?)'
-    );
-
-    const batch = lines.map(l =>
-      insertStmt.bind(customerId, l.line, l.productType, l.premium || 0, user.id, user.officeId)
-    );
-
-    await c.env.DB.batch(batch);
+    // P0 Fix #2: emit a submitted_app activity_event so the Sprint 3 scoreboard
+    // for "Submitted App" trackable reflects this submission. Best-effort — if
+    // the migration isn't run yet the catch silently no-ops.
+    try {
+      await c.env.DB.prepare(`
+        INSERT INTO activity_events
+          (user_id, office_id, activity_date, activity_type, count, customer_name, lead_source)
+        VALUES (?, ?, date('now'), 'submitted_app', ?, ?, ?)
+      `).bind(user.id, user.officeId, lines.length, customerName, leadSource || null).run();
+    } catch (e) { /* migration 001 pending — fall back silently */ }
 
     // Create lead with temperature (auto-closed since app is being submitted)
     if (leadTemperature) {

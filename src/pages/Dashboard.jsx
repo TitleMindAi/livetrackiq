@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../lib/AuthContext';
 import { api } from '../lib/api';
-import { APP_TYPES, LINES, TIME_FILTERS } from '../lib/constants';
+import { APP_TYPES, LINES, TIME_FILTERS, FEATURE_FLAGS, ACTIVITY_TYPES } from '../lib/constants';
 import QuoteLogger from '../components/QuoteLogger';
+import ActivityLogger from '../components/ActivityLogger';
+import OpenQuotes from '../components/OpenQuotes';
 
 /**
  * Dashboard — Desktop-optimized agent view
@@ -13,6 +15,15 @@ import QuoteLogger from '../components/QuoteLogger';
 export default function Dashboard() {
   const { user } = useAuth();
   const [view, setView] = useState('today');
+  // Sprint 3: scoreboard trackable selector. '' = legacy submitted-apps view.
+  const [trackable, setTrackable] = useState('');
+  // Hank 2026-04-28: multi-select set of trackables (in addition to legacy single)
+  const [trackables, setTrackables] = useState(new Set());
+  // Hank v2: custom date range (defaults to current month)
+  const _today = new Date().toISOString().slice(0, 10);
+  const _firstOfMonth = _today.slice(0, 8) + '01';
+  const [customFrom, setCustomFrom] = useState(_firstOfMonth);
+  const [customTo, setCustomTo] = useState(_today);
   const [data, setData] = useState(null);
   const [goalData, setGoalData] = useState(null);
   const [selectedUserId, setSelectedUserId] = useState(null);
@@ -38,6 +49,18 @@ export default function Dashboard() {
     if (isBackgroundRefresh) setIsRefreshing(true);
     try {
       const params = { view };
+      // Hank v2: pass custom range to API when in custom mode
+      if (FEATURE_FLAGS.ff_custom_date_range && view === 'custom') {
+        params.from = customFrom;
+        params.to = customTo;
+      }
+      // Sprint 3: scope leaderboard + recent to a trackable
+      // Hank 2026-04-28: support multi-select via `trackables` (CSV)
+      if (FEATURE_FLAGS.ff_leaderboard_multi && trackables.size > 0) {
+        params.trackables = Array.from(trackables).join(',');
+      } else if (FEATURE_FLAGS.ff_all_trackables_board && trackable) {
+        params.trackable = trackable;
+      }
       // Support both single user and multi-select
       if (selectedUserIds.size > 0) {
         params.userIds = Array.from(selectedUserIds).join(',');
@@ -65,7 +88,7 @@ export default function Dashboard() {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [view, selectedUserId, selectedUserIds]);
+  }, [view, selectedUserId, selectedUserIds, customFrom, customTo, trackable, trackables]);
 
   // Initial load
   useEffect(() => { loadData(); }, [loadData]);
@@ -109,7 +132,7 @@ export default function Dashboard() {
     // This effect is implicit: changing view or selectedUserId will trigger
     // the dependency change in the auto-polling effect above, which clears
     // and restarts the interval.
-  }, [view, selectedUserId, selectedUserIds]);
+  }, [view, selectedUserId, selectedUserIds, customFrom, customTo, trackable, trackables]);
 
   // Build summary map
   const summaryMap = {};
@@ -238,24 +261,52 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Time Filters */}
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {TIME_FILTERS.map(f => (
-              <button
-                key={f.key}
-                onClick={() => setView(f.key)}
+          {/* Time Filter — dropdown (Hank: collapse buttons into a single selector) */}
+          <select
+            value={view}
+            onChange={e => setView(e.target.value)}
+            style={{
+              padding: '8px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              background: 'var(--bg-card)', border: '1px solid var(--border-input)',
+              color: 'var(--text)', outline: 'none', cursor: 'pointer',
+              minWidth: 140,
+            }}
+          >
+            {TIME_FILTERS
+              .filter(f => FEATURE_FLAGS.ff_custom_date_range || f.key !== 'custom')
+              .map(f => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+          </select>
+
+          {/* Hank v2: Custom date range inputs — shown when Custom tab active */}
+          {FEATURE_FLAGS.ff_custom_date_range && view === 'custom' && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo}
+                onChange={e => setCustomFrom(e.target.value)}
                 style={{
-                  padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-                  cursor: 'pointer', transition: 'all .15s',
-                  border: view === f.key ? '1px solid var(--accent-border)' : '1px solid var(--border-input)',
-                  background: view === f.key ? 'var(--accent-bg)' : 'var(--bg-card)',
-                  color: view === f.key ? 'var(--accent)' : 'var(--text-muted)',
+                  padding: '6px 10px', borderRadius: 8, fontSize: 12,
+                  background: 'var(--bg-input)', border: '1px solid var(--border-input)',
+                  color: 'var(--text)', outline: 'none', cursor: 'pointer',
                 }}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+              />
+              <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>→</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom}
+                onChange={e => setCustomTo(e.target.value)}
+                style={{
+                  padding: '6px 10px', borderRadius: 8, fontSize: 12,
+                  background: 'var(--bg-input)', border: '1px solid var(--border-input)',
+                  color: 'var(--text)', outline: 'none', cursor: 'pointer',
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -263,16 +314,23 @@ export default function Dashboard() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-faint)' }}>Loading...</div>
       ) : (
         <>
-          {/* Stats Cards Row */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
-            {/* Total */}
+          {/* Stats Cards Row — Hank: prominent Total Premium alongside per-line counts */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
+            {/* Total Apps */}
             <StatCard
               label="Total Apps"
               value={totalApps}
-              sub={`$${totalPremium.toLocaleString()} premium`}
+              sub={`${data?.summary?.length || 0} line${(data?.summary?.length || 0) === 1 ? '' : 's'}`}
               color="var(--accent)"
             />
-            {/* Per line */}
+            {/* Total Premium — dedicated card (Hank request) */}
+            <StatCard
+              label="Total Premium"
+              value={`$${totalPremium.toLocaleString()}`}
+              sub="all submitted apps"
+              color="var(--success)"
+            />
+            {/* Per line: count + premium below */}
             {LINES.map(line => {
               const info = APP_TYPES[line];
               const s = summaryMap[line];
@@ -288,8 +346,13 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* Quote Logger — Quick Entry */}
-          <QuoteLogger />
+          {/* Quote/Activity Logger — Quick Entry (Hank v2 gated) */}
+          {FEATURE_FLAGS.ff_log_activities
+            ? <ActivityLogger onFallback={() => console.warn('[ff_log_activities] falling back to QuoteLogger')} />
+            : <QuoteLogger />}
+
+          {/* Sprint 2: Open Quotes → Submit App workflow */}
+          {FEATURE_FLAGS.ff_quote_to_app && <OpenQuotes refreshKey={lastUpdated} />}
 
           {/* Goal Pace Cards */}
           {goalData && (
@@ -374,6 +437,67 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Sprint 3: Trackable selector for leaderboard + recent
+              Hank 2026-04-28: now supports multi-select via ff_leaderboard_multi */}
+          {FEATURE_FLAGS.ff_all_trackables_board && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
+              padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 10, flexWrap: 'wrap',
+            }}>
+              <span style={{
+                fontSize: 11, fontWeight: 700, color: 'var(--text-faint)',
+                letterSpacing: '.1em', textTransform: 'uppercase',
+              }}>
+                Scoreboard Metric{FEATURE_FLAGS.ff_leaderboard_multi ? 's' : ''}
+              </span>
+              <button
+                type="button"
+                onClick={() => { setTrackable(''); setTrackables(new Set()); }}
+                style={chipStyle(!trackable && trackables.size === 0, 'var(--accent)')}
+              >
+                Submitted Apps (legacy)
+              </button>
+              {FEATURE_FLAGS.ff_leaderboard_multi && (
+                <button
+                  type="button"
+                  onClick={() => { setTrackable(''); setTrackables(new Set(ACTIVITY_TYPES.map(a => a.key))); }}
+                  style={chipStyle(trackables.size === ACTIVITY_TYPES.length, '#a855f7')}
+                  title="Sum across all 8 trackables"
+                >
+                  All Activities
+                </button>
+              )}
+              {ACTIVITY_TYPES.map(a => {
+                const active = FEATURE_FLAGS.ff_leaderboard_multi
+                  ? trackables.has(a.key)
+                  : trackable === a.key;
+                return (
+                  <button
+                    key={a.key}
+                    type="button"
+                    onClick={() => {
+                      if (FEATURE_FLAGS.ff_leaderboard_multi) {
+                        setTrackable('');
+                        setTrackables(prev => {
+                          const next = new Set(prev);
+                          if (next.has(a.key)) next.delete(a.key); else next.add(a.key);
+                          return next;
+                        });
+                      } else {
+                        setTrackable(a.key);
+                      }
+                    }}
+                    style={chipStyle(active, a.color)}
+                    title={a.label}
+                  >
+                    {a.icon} {a.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Bottom Grid: Leaderboard + Recent Activity */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
             {/* Leaderboard */}
@@ -406,7 +530,11 @@ export default function Dashboard() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>{agent.total_apps || 0}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>${(agent.total_premium || 0).toLocaleString()}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                      {trackable
+                        ? (ACTIVITY_TYPES.find(t => t.key === trackable)?.label || '')
+                        : `$${(agent.total_premium || 0).toLocaleString()}`}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -417,46 +545,184 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Recent Activity */}
+            {/* Recent Activity — Hank 2026-04-28: aggregated per person */}
             <div style={cardStyle}>
               <div style={{
-                color: 'var(--text-faint)', fontSize: 11, fontWeight: 700,
-                letterSpacing: '.1em', marginBottom: 12, textTransform: 'uppercase',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12,
               }}>
-                Recent Activity
-              </div>
-              {(data?.recentActivity || []).map(a => (
-                <div key={a.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '8px 0',
-                  borderBottom: '1px solid var(--border-separator)',
+                <div style={{
+                  color: 'var(--text-faint)', fontSize: 11, fontWeight: 700,
+                  letterSpacing: '.1em', textTransform: 'uppercase',
                 }}>
-                  <span style={{ fontSize: 16 }}>{APP_TYPES[a.line]?.icon}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, color: 'var(--text)' }}>
-                      <strong>{a.customer_name}</strong>
-                      <span style={{ color: 'var(--text-faint)' }}> — {a.product_type}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-disabled)' }}>
-                      {a.agent_name} &middot; {formatTime(a.submitted_at)}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--success)' }}>
-                    ${(a.premium || 0).toLocaleString()}
-                  </div>
+                  Recent Activity
                 </div>
-              ))}
-              {(!data?.recentActivity || data.recentActivity.length === 0) && (
-                <div style={{ color: 'var(--text-disabled)', fontSize: 13, padding: 20, textAlign: 'center' }}>
-                  No recent activity
-                </div>
-              )}
+              </div>
+              <RecentActivityPanel data={data} />
             </div>
           </div>
         </>
       )}
     </div>
   );
+}
+
+/**
+ * RecentActivityPanel — Hank 2026-04-28
+ * Aggregates per-person counts by line/activity to fight the "one row per policy" sprawl.
+ *
+ * Compact mode (ff_recent_compact):
+ *   "John Smith   Auto-2 Fire-2 Life-2 LTD-2"
+ * Legacy:
+ *   one row per app/event with timestamp.
+ */
+function RecentActivityPanel({ data }) {
+  const list = data?.recentActivity || [];
+  if (list.length === 0) {
+    return (
+      <div style={{ color: 'var(--text-disabled)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+        No recent activity
+      </div>
+    );
+  }
+
+  if (!FEATURE_FLAGS.ff_recent_compact) {
+    // Legacy verbose render (preserved for fallback)
+    return (
+      <div>
+        {list.map(a => {
+          const trackableDef = a.activity_type
+            ? ACTIVITY_TYPES.find(t => t.key === a.activity_type)
+            : null;
+          const lineInfo = APP_TYPES[a.line];
+          const icon = trackableDef?.icon || lineInfo?.icon || '•';
+          const right = a.activity_type
+            ? (a.count > 1 ? `×${a.count}` : '')
+            : `$${(a.premium || 0).toLocaleString()}`;
+          return (
+            <div key={a.id} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 0',
+              borderBottom: '1px solid var(--border-separator)',
+            }}>
+              <span style={{ fontSize: 16 }}>{icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: 'var(--text)' }}>
+                  <strong>{a.customer_name}</strong>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-disabled)' }}>
+                  {a.agent_name} · {formatTime(a.submitted_at)}
+                </div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: trackableDef?.color || 'var(--success)' }}>
+                {right}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Compact: roll up per agent → per category counts
+  // Categories prefer activity_type when present (trackable view); else use line (apps view)
+  const byAgent = new Map();
+  let latestByAgent = new Map();
+  for (const a of list) {
+    const agent = a.agent_name || 'Unknown';
+    const key = a.activity_type || a.line || 'other';
+    const count = a.activity_type ? (a.count || 1) : 1; // applications count as 1
+    const premium = a.activity_type ? 0 : (a.premium || 0);
+    if (!byAgent.has(agent)) byAgent.set(agent, { counts: {}, premium: 0, initials: a.initials });
+    const bucket = byAgent.get(agent);
+    bucket.counts[key] = (bucket.counts[key] || 0) + count;
+    bucket.premium += premium;
+    const t = new Date(a.submitted_at || 0).getTime();
+    if (!latestByAgent.has(agent) || latestByAgent.get(agent) < t) latestByAgent.set(agent, t);
+  }
+  // Sort agents by latest activity
+  const agents = Array.from(byAgent.entries()).sort((a, b) =>
+    (latestByAgent.get(b[0]) || 0) - (latestByAgent.get(a[0]) || 0)
+  );
+
+  // Display label/color helper
+  const labelFor = (key) => {
+    const def = ACTIVITY_TYPES.find(a => a.key === key);
+    if (def) {
+      // Compact label: Auto Quote → Auto, Disability Presentation → LTD, etc.
+      const map = {
+        auto_quote: 'Auto', fire_quote: 'Fire',
+        life_presentation: 'Life', disability_presentation: 'LTD',
+        submitted_app: 'App', google_review_completed: 'GReview',
+        google_review_ask: 'GAsk', referral_hh_quoted: 'Ref',
+      };
+      return { label: map[key] || def.label, color: def.color, icon: def.icon };
+    }
+    const info = APP_TYPES[key];
+    if (info) {
+      const lineMap = { auto: 'Auto', fire: 'Fire', life: 'Life', disability: 'LTD' };
+      return { label: lineMap[key] || info.label, color: info.color, icon: info.icon };
+    }
+    return { label: key, color: 'var(--text-muted)', icon: '•' };
+  };
+
+  return (
+    <div>
+      {agents.map(([agent, bucket]) => {
+        const entries = Object.entries(bucket.counts);
+        return (
+          <div key={agent} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 0',
+            borderBottom: '1px solid var(--border-separator)',
+          }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: 'var(--bg-inner)', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
+            }}>
+              {bucket.initials || agent.split(' ').map(s => s[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                {agent}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {entries.map(([k, n]) => {
+                  const lbl = labelFor(k);
+                  return (
+                    <span key={k} style={{
+                      fontSize: 11, fontWeight: 600,
+                      padding: '2px 8px', borderRadius: 6,
+                      background: `${lbl.color}1f`, color: lbl.color,
+                    }}>
+                      {lbl.label}-{n}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            {bucket.premium > 0 && (
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--success)' }}>
+                ${bucket.premium.toLocaleString()}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function chipStyle(active, color) {
+  return {
+    padding: '6px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+    cursor: 'pointer', transition: 'all .12s',
+    border: `1px solid ${active ? color : 'var(--border-input)'}`,
+    background: active ? `${color}22` : 'var(--bg-card)',
+    color: active ? color : 'var(--text-muted)',
+    whiteSpace: 'nowrap',
+  };
 }
 
 function StatCard({ label, value, sub, color }) {

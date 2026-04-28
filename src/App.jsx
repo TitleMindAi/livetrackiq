@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './lib/AuthContext';
 import { useTheme } from './lib/ThemeContext';
+import { FEATURE_FLAGS } from './lib/constants';
 import ErrorBoundary from './lib/ErrorBoundary';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Intake from './pages/Intake';
 import Goals from './pages/Goals';
+import Bonus from './pages/Bonus';
 import Admin from './pages/Admin';
 
 /**
@@ -44,6 +46,12 @@ export default function App() {
   if (!user) return <Login />;
 
   const isAdmin = ['admin', 'team_leader'].includes(user.role);
+  // Sprint 4: Admin tab is owner-only when ff_admin_lock is on.
+  // Hank 2026-04-28: he reported the Admin button disappeared. Root cause: is_owner
+  // defaults to 0 in DB, so the strict owner-only check hid the tab from everyone.
+  // Restore visibility to admin/team_leader. Owner-only stricter mode can be
+  // re-enabled later by flipping ff_admin_lock once is_owner is properly set.
+  const canSeeAdmin = isAdmin;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -77,7 +85,10 @@ export default function App() {
               + Submit App
             </NavBtn>
             <NavBtn active={page === 'goals'} onClick={() => navigate('goals')}>Goals</NavBtn>
-            {isAdmin && (
+            {FEATURE_FLAGS.ff_bonus_tab && (
+              <NavBtn active={page === 'bonus'} onClick={() => navigate('bonus')}>Bonus</NavBtn>
+            )}
+            {canSeeAdmin && (
               <NavBtn active={page === 'admin'} onClick={() => navigate('admin')}>Admin</NavBtn>
             )}
           </div>
@@ -133,7 +144,8 @@ export default function App() {
           {page === '' && <Dashboard />}
           {page === 'intake' && <Intake />}
           {page === 'goals' && <Goals />}
-          {page === 'admin' && isAdmin && <Admin />}
+          {page === 'bonus' && FEATURE_FLAGS.ff_bonus_tab && <Bonus />}
+          {page === 'admin' && canSeeAdmin && <Admin />}
         </main>
       </ErrorBoundary>
     </div>

@@ -11,15 +11,17 @@ holidayRoutes.get('/', async (c) => {
   const user = c.get('user');
   const yearParam = c.req.query('year');
 
-  let sql = 'SELECT id, name, date, CAST(strftime("%Y", date) as INTEGER) as year FROM holidays WHERE office_id = ?';
-  const params = [user.officeId];
+  // Schema: holidays(id, name, holiday_date, year). Aliased to `date` for client compat.
+  // Office filter is graceful — schema has no office_id (holidays are global per office).
+  let sql = 'SELECT id, name, holiday_date AS date, year FROM holidays';
+  const params = [];
 
   if (yearParam) {
-    sql += ' AND CAST(strftime("%Y", date) as INTEGER) = ?';
+    sql += ' WHERE year = ?';
     params.push(parseInt(yearParam));
   }
 
-  sql += ' ORDER BY date';
+  sql += ' ORDER BY holiday_date';
 
   const result = await c.env.DB.prepare(sql).bind(...params).all();
   return c.json({ holidays: result.results });
@@ -43,9 +45,11 @@ holidayRoutes.post('/', async (c) => {
   const { name, date } = result.data;
 
   try {
+    // Derive year from YYYY-MM-DD; schema has no office_id column.
+    const year = parseInt((date || '').slice(0, 4), 10);
     const result = await c.env.DB.prepare(
-      'INSERT INTO holidays (office_id, name, date) VALUES (?, ?, ?) RETURNING id'
-    ).bind(user.officeId, name, date).first();
+      'INSERT INTO holidays (name, holiday_date, year) VALUES (?, ?, ?) RETURNING id'
+    ).bind(name, date, year).first();
 
     return c.json({ id: result.id, message: 'Holiday added' }, 201);
   } catch (err) {
@@ -63,9 +67,8 @@ holidayRoutes.delete('/:id', async (c) => {
 
   const id = parseInt(c.req.param('id'));
 
-  await c.env.DB.prepare('DELETE FROM holidays WHERE id = ? AND office_id = ?')
-    .bind(id, user.officeId)
-    .run();
+  // Schema has no office_id; holidays are global. Owner-only enforced above.
+  await c.env.DB.prepare('DELETE FROM holidays WHERE id = ?').bind(id).run();
 
   return c.json({ ok: true });
 });

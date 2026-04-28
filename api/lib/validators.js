@@ -8,6 +8,7 @@ export const submitAppSchema = z.object({
   email: z.string().email('Invalid email').optional(),
   notes: z.string().optional(),
   leadTemperature: z.enum(['hot', 'medium', 'cold']).optional(),
+  leadSource: z.string().max(64).optional(), // Hank v2: free-form after enum + other
   lines: z.array(
     z.object({
       line: z.enum(['auto', 'fire', 'life', 'disability']),
@@ -53,6 +54,47 @@ export const setRatiosSchema = z.object({
 export const logQuotesSchema = z.object({
   line: z.enum(['auto', 'fire', 'life', 'disability']),
   count: z.number().int('Count must be an integer').min(1, 'Count must be >= 1'),
+});
+
+// Hank Sprint 5: custom goal CRUD (covers new trackables + free-form goals)
+export const customGoalSchema = z.object({
+  userId: z.number().optional(),                    // null/undefined = office-wide
+  period: z.string().regex(/^\d{4}-\d{2}$/, 'Period must be YYYY-MM'),
+  trackerKey: z.string().min(1).max(64),
+  label: z.string().min(1).max(120),
+  countGoal: z.number().int().min(0).default(0),
+  premiumGoal: z.number().min(0).default(0),
+  closingRatio: z.number().min(0).max(1).default(0),
+});
+
+// Hank v2 Sprint 2: convert a logged quote activity into a submitted app
+// Hank 2026-04-28: support N premiums when source quote count > 1.
+//   - `premium` (legacy single) still accepted for backward-compat
+//   - `premiums` array (new) creates N apps from the same source activity
+export const submitFromActivitySchema = z.object({
+  premium: z.number().min(0, 'Premium must be >= 0').optional(),
+  premiums: z.array(z.number().min(0)).optional(),
+  productType: z.string().min(1, 'Product type required').max(80),
+  // Optional override of customer name if not stored on the activity
+  customerName: z.string().max(200).optional(),
+  notes: z.string().max(500).optional(),
+}).refine(
+  v => typeof v.premium === 'number' || (Array.isArray(v.premiums) && v.premiums.length > 0),
+  { message: 'Either premium or premiums[] is required' }
+);
+
+// Hank v2: log activity event — one of 8 trackable types
+export const ACTIVITY_TYPES_ENUM = [
+  'auto_quote', 'fire_quote', 'life_presentation', 'disability_presentation',
+  'submitted_app', 'google_review_completed', 'google_review_ask', 'referral_hh_quoted',
+];
+export const logActivitySchema = z.object({
+  activityType: z.enum(ACTIVITY_TYPES_ENUM),
+  count: z.number().int().min(1).default(1),
+  customerName: z.string().max(200).optional(),
+  leadSource: z.string().max(64).optional(),
+  leadTemperature: z.enum(['hot', 'medium', 'cold']).optional(),
+  notes: z.string().max(500).optional(),
 });
 
 export const addHolidaySchema = z.object({

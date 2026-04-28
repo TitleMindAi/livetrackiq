@@ -6,6 +6,8 @@ import { goalRoutes } from './routes/goals.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { userRoutes } from './routes/users.js';
 import { quoteRoutes } from './routes/quotes.js';
+import { activityRoutes } from './routes/activities.js';
+import { bonusRoutes } from './routes/bonus.js';
 import { holidayRoutes } from './routes/holidays.js';
 import { authMiddleware } from './middleware/auth.js';
 import { logger } from './middleware/logger.js';
@@ -34,6 +36,8 @@ api.route('/api/goals', goalRoutes);
 api.route('/api/dashboard', dashboardRoutes);
 api.route('/api/users', userRoutes);
 api.route('/api/quotes', quoteRoutes);
+api.route('/api/activities', activityRoutes);
+api.route('/api/bonus', bonusRoutes);
 api.route('/api/holidays', holidayRoutes);
 
 // DB init endpoint (run once to create tables)

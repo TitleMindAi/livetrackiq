@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '../lib/api';
-import { APP_TYPES, LINES } from '../lib/constants';
+import { APP_TYPES, LINES, LEAD_SOURCES, FEATURE_FLAGS } from '../lib/constants';
 
 /**
  * App Intake — Customer-Name-First flow
@@ -10,13 +10,14 @@ import { APP_TYPES, LINES } from '../lib/constants';
  * Right: product type selectors per line
  */
 export default function Intake() {
+  // Hank 2026-04-24 spec: Submit App screen collects ONLY customer name + lead source.
+  // Phone/email/notes/lead-temp removed — submitted apps are "finished" (no temp), and
+  // contact details belong elsewhere if needed (typeahead still pulls from prior customers).
   const [customerName, setCustomerName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [notes, setNotes] = useState('');
   const [selectedLines, setSelectedLines] = useState([]); // [{line, productType, premium, id}]
   const [activeLine, setActiveLine] = useState(null); // which line category is expanded
-  const [leadTemp, setLeadTemp] = useState('hot');
+  const [leadSource, setLeadSource] = useState('');          // Hank v2: required dropdown
+  const [leadSourceOther, setLeadSourceOther] = useState(''); // Free-text if "other"
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
@@ -70,8 +71,6 @@ export default function Intake() {
 
   const selectCustomer = useCallback((customer) => {
     setCustomerName(customer.name);
-    setPhone(customer.phone || '');
-    setEmail(customer.email || '');
     setSearchResults([]);
     setSearchOpen(false);
   }, []);
@@ -90,12 +89,15 @@ export default function Intake() {
 
     setSubmitting(true);
     try {
+      // Hank v2: resolve lead source (empty => legacy path, no source sent)
+      const resolvedSource = FEATURE_FLAGS.ff_lead_sources && leadSource
+        ? (leadSource === 'other' ? (leadSourceOther.trim() || 'other') : leadSource)
+        : undefined;
+
       await api.submitApp({
         customerName: customerName.trim(),
-        phone: phone.trim() || undefined,
-        email: email.trim() || undefined,
-        notes: notes.trim() || undefined,
-        leadTemperature: leadTemp,
+        // No phone/email/notes/leadTemperature — Hank: submitted apps are finished
+        leadSource: resolvedSource,
         lines: selectedLines.map(l => ({
           line: l.line,
           productType: l.productType,
@@ -106,10 +108,8 @@ export default function Intake() {
       setToast({ type: 'success', message: `${customerName} submitted! ${selectedLines.length} line(s)` });
       // Reset form
       setCustomerName('');
-      setPhone('');
-      setEmail('');
-      setNotes('');
-      setLeadTemp('hot');
+      setLeadSource('');
+      setLeadSourceOther('');
       setSelectedLines([]);
       setActiveLine(null);
       setTimeout(() => setToast(null), 3000);
@@ -190,11 +190,11 @@ export default function Intake() {
                         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
                           {cust.name}
                         </div>
-                        <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
-                          {cust.phone && <span>{cust.phone}</span>}
-                          {cust.phone && cust.app_count > 0 && <span> • </span>}
-                          {cust.app_count > 0 && <span>{cust.app_count} app{cust.app_count !== 1 ? 's' : ''}</span>}
-                        </div>
+                        {cust.app_count > 0 && (
+                          <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
+                            {cust.app_count} app{cust.app_count !== 1 ? 's' : ''}
+                          </div>
+                        )}
                       </div>
                     ))}
                     <div style={{
@@ -207,45 +207,35 @@ export default function Intake() {
                   </div>
                 )}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                <input placeholder="Phone" value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} />
-                <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} />
-              </div>
-              <textarea
-                placeholder="Notes (optional)"
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                rows={2}
-                style={{ ...inputStyle, marginTop: 8, resize: 'vertical' }}
-              />
 
-              {/* Lead Temperature */}
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', letterSpacing: '.05em', marginBottom: 6 }}>
-                  LEAD TEMPERATURE
+              {/* Lead Source (Hank v2) — primary qualifier on Submit App */}
+              {FEATURE_FLAGS.ff_lead_sources && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', letterSpacing: '.05em', marginBottom: 6 }}>
+                    LEAD SOURCE
+                  </div>
+                  <select
+                    value={leadSource}
+                    onChange={e => setLeadSource(e.target.value)}
+                    style={{ ...inputStyle, cursor: 'pointer' }}
+                  >
+                    <option value="">Select a source…</option>
+                    {LEAD_SOURCES.map(s => (
+                      <option key={s.key} value={s.key}>{s.label}</option>
+                    ))}
+                  </select>
+                  {leadSource === 'other' && (
+                    <input
+                      placeholder="Specify source"
+                      value={leadSourceOther}
+                      onChange={e => setLeadSourceOther(e.target.value)}
+                      style={{ ...inputStyle, marginTop: 6 }}
+                    />
+                  )}
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  {[
-                    { value: 'hot', label: 'Hot', color: '#ef4444', bg: 'rgba(239,68,68,.15)', icon: '🔥' },
-                    { value: 'medium', label: 'Warm', color: '#f59e0b', bg: 'rgba(245,158,11,.15)', icon: '🌤' },
-                    { value: 'cold', label: 'Cold', color: '#3b82f6', bg: 'rgba(59,130,246,.15)', icon: '❄️' },
-                  ].map(t => (
-                    <button
-                      key={t.value}
-                      onClick={() => setLeadTemp(t.value)}
-                      style={{
-                        flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 13, fontWeight: 700,
-                        cursor: 'pointer', transition: 'all .15s', textAlign: 'center',
-                        border: leadTemp === t.value ? `2px solid ${t.color}` : '2px solid var(--border-input)',
-                        background: leadTemp === t.value ? t.bg : 'var(--bg-input)',
-                        color: leadTemp === t.value ? t.color : 'var(--text-muted)',
-                      }}
-                    >
-                      {t.icon} {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              )}
+
+              {/* Lead Temperature removed per Hank — submitted apps are "finished" (lead temp lives on Activities) */}
             </div>
 
             {/* Selected Lines Summary */}

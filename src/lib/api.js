@@ -41,6 +41,11 @@ export const api = {
   getGoalCalc: (params) => request(`/goals/calculator?${new URLSearchParams(params)}`),
   setGoals: (data) => request('/goals', { method: 'PUT', body: JSON.stringify(data) }),
   setRatios: (data) => request('/goals/ratios', { method: 'PUT', body: JSON.stringify(data) }),
+  // Sprint 5: custom + trackable goals
+  getCustomGoals: (params) => request(`/goals/custom?${new URLSearchParams(params)}`),
+  createCustomGoal: (data) => request('/goals/custom', { method: 'POST', body: JSON.stringify(data) }),
+  updateCustomGoal: (id, data) => request(`/goals/custom/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteCustomGoal: (id) => request(`/goals/custom/${id}`, { method: 'DELETE' }),
 
   // Dashboard
   getDashboard: (params) => request(`/dashboard?${new URLSearchParams(params)}`),
@@ -51,10 +56,18 @@ export const api = {
   createUser: (data) => request('/users', { method: 'POST', body: JSON.stringify(data) }),
   updateUser: (id, data) => request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
-  // Quotes
+  // Quotes (legacy)
   logQuotes: (data) => request('/quotes', { method: 'POST', body: JSON.stringify(data) }),
   getTodayQuotes: () => request('/quotes/today'),
   getQuoteSummary: (params) => request(`/quotes/summary?${new URLSearchParams(params)}`),
+
+  // Hank v2 — Activities (unified trackables)
+  logActivity: (data) => request('/activities', { method: 'POST', body: JSON.stringify(data) }),
+  getTodayActivities: () => request('/activities/today'),
+  getActivitySummary: (params) => request(`/activities/summary?${new URLSearchParams(params)}`),
+  // Sprint 2: open quotes + convert to app
+  getOpenQuotes: (params) => request(`/activities/open-quotes${params ? `?${new URLSearchParams(params)}` : ''}`),
+  submitAppFromActivity: (id, data) => request(`/activities/${id}/submit-app`, { method: 'POST', body: JSON.stringify(data) }),
 
   // Holidays
   getHolidays: (year) => request(`/holidays${year ? `?year=${year}` : ''}`),
